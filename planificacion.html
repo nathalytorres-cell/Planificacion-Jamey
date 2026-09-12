@@ -1012,6 +1012,25 @@ function fusionar(local, remoto){
    ============================================================ */
 const urlSync = () => { try{ return localStorage.getItem(KEY_URL)||''; }catch(e){ return ''; } };
 
+/* Lectura por etiqueta <script> en vez de fetch.
+   El navegador bloquea fetch hacia Apps Script cuando Google no devuelve la
+   cabecera de origen cruzado; una etiqueta <script> no pasa por esa
+   verificación, así que la lectura siempre llega. Requiere que doGet del
+   Apps Script acepte el parámetro callback (ver archivo .gs adjunto). */
+function leerHoja(url, ms){
+  return new Promise((resolve, reject) => {
+    const fn = 'pj_' + Date.now().toString(36) + Math.floor(Math.random()*1e4).toString(36);
+    const sc = document.createElement('script');
+    let listo = false;
+    const limpiar = () => { delete window[fn]; if(sc.parentNode) sc.parentNode.removeChild(sc); };
+    const reloj = setTimeout(() => { if(!listo){ limpiar(); reject(new Error('La hoja no respondió a tiempo.')); } }, ms || 20000);
+    window[fn] = datos => { listo = true; clearTimeout(reloj); limpiar(); resolve(datos); };
+    sc.onerror = () => { if(!listo){ clearTimeout(reloj); limpiar(); reject(new Error('No se pudo contactar la hoja.')); } };
+    sc.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + fn + '&v=' + Date.now();
+    document.body.appendChild(sc);
+  });
+}
+
 $('#btnConn').onclick = () => {
   abrirModal(`<h3>Conexión con Google Sheets</h3>
     <p class="hint">Pega aquí la URL de la aplicación web de Apps Script (termina en <code>/exec</code>).
@@ -1033,10 +1052,8 @@ $('#syncbtn').onclick = async () => {
   const btn = $('#syncbtn');
   btn.disabled = true; infoSync('Trayendo…');
   try{
-    const res = await fetch(url, {method:'GET'});
-    const txt = await res.text();
-    let remoto = [];
-    try{ remoto = JSON.parse(txt); }catch(e){ remoto = []; }
+    let remoto = await leerHoja(url);
+    if(typeof remoto === 'string'){ try{ remoto = JSON.parse(remoto); }catch(e){ remoto = []; } }
     if(!Array.isArray(remoto)) remoto = [];
     // salvaguarda de arranque: nunca subir una copia local vacía sobre una hoja con datos
     const localLlena = D.filter(r=>r._kind!=='person').length;
@@ -1048,15 +1065,29 @@ $('#syncbtn').onclick = async () => {
     D = fusionar(D, remoto);
     guardar();
     infoSync('Subiendo…');
-    const post = await fetch(url, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(D)});
-    await post.text();
+    // Apps Script no devuelve cabeceras CORS al recibir datos, así que el envío
+    // va en modo opaco: se manda y no se lee la respuesta. Por eso después se
+    // vuelve a leer la hoja para confirmar que lo enviado llegó completo.
+    await fetch(url, {method:'POST', mode:'no-cors', body: JSON.stringify(D)});
     const h = new Date().toLocaleTimeString('es-DO',{hour:'2-digit',minute:'2-digit'});
     try{ localStorage.setItem(KEY_SYNC, h); }catch(e){}
-    infoSync('Sincronizado a las ' + h);
+    infoSync('Verificando…');
     render();
+    await new Promise(r => setTimeout(r, 1800));
+    let ok = false;
+    try{
+      let arr = await leerHoja(url, 12000);
+      if(typeof arr === 'string') arr = JSON.parse(arr);
+      ok = Array.isArray(arr) && arr.filter(r=>r._kind!=='person').length >= procesos().length;
+    }catch(e){ ok = false; }
+    if(ok){ infoSync('Sincronizado a las ' + h); }
+    else {
+      infoSync('Subida sin confirmar.');
+      alert('Los datos se bajaron bien, pero no pude confirmar que la subida llegara completa a la hoja.\n\nTu trabajo está guardado en este navegador. Pulsa ↓ Exportar para tener un respaldo y vuelve a sincronizar en un momento.');
+    }
   }catch(err){
     infoSync('No se pudo conectar.');
-    alert('No se pudo sincronizar.\n\nRevisa que la implementación del Apps Script esté publicada con acceso para "Cualquier persona" y que la URL termine en /exec.\n\nDetalle: ' + err);
+    alert('No se pudo sincronizar.\n\nRevisa dos cosas en el Apps Script:\n1. Que doGet acepte el parámetro callback (archivo .gs adjunto).\n2. Que la implementación esté como "Ejecutar como: yo" y "Acceso: cualquiera", y que hayas pulsado Implementar.\n\nTu trabajo sigue guardado en este navegador. Pulsa ↓ Exportar para respaldarlo.\n\nDetalle: ' + err);
   }
   btn.disabled = false;
 };
