@@ -1031,6 +1031,34 @@ function leerHoja(url, ms){
   });
 }
 
+/* Envío por formulario oculto en vez de fetch.
+   Un formulario enviado a un marco invisible es una navegación normal, no una
+   llamada de fondo, así que no pasa por la verificación de origen cruzado.
+   Requiere que doPost del Apps Script lea el campo "datos" (ver archivo .gs). */
+function enviarHoja(url, texto){
+  return new Promise(resolve => {
+    const nombre = 'pj_marco_' + Date.now().toString(36);
+    const marco = document.createElement('iframe');
+    marco.name = nombre; marco.style.display = 'none';
+    document.body.appendChild(marco);
+    const form = document.createElement('form');
+    form.method = 'POST'; form.action = url; form.target = nombre; form.style.display = 'none';
+    const campo = document.createElement('textarea');
+    campo.name = 'datos'; campo.value = texto;
+    form.appendChild(campo);
+    document.body.appendChild(form);
+    let listo = false;
+    const terminar = () => {
+      if(listo) return; listo = true;
+      setTimeout(() => { if(form.parentNode) form.remove(); if(marco.parentNode) marco.remove(); }, 100);
+      resolve();
+    };
+    marco.onload = terminar;
+    setTimeout(terminar, 20000);
+    form.submit();
+  });
+}
+
 $('#btnConn').onclick = () => {
   abrirModal(`<h3>Conexión con Google Sheets</h3>
     <p class="hint">Pega aquí la URL de la aplicación web de Apps Script (termina en <code>/exec</code>).
@@ -1068,7 +1096,7 @@ $('#syncbtn').onclick = async () => {
     // Apps Script no devuelve cabeceras CORS al recibir datos, así que el envío
     // va en modo opaco: se manda y no se lee la respuesta. Por eso después se
     // vuelve a leer la hoja para confirmar que lo enviado llegó completo.
-    await fetch(url, {method:'POST', mode:'no-cors', body: JSON.stringify(D)});
+    await enviarHoja(url, JSON.stringify(D));
     const h = new Date().toLocaleTimeString('es-DO',{hour:'2-digit',minute:'2-digit'});
     try{ localStorage.setItem(KEY_SYNC, h); }catch(e){}
     infoSync('Verificando…');
@@ -1087,7 +1115,7 @@ $('#syncbtn').onclick = async () => {
     }
   }catch(err){
     infoSync('No se pudo conectar.');
-    alert('No se pudo sincronizar.\n\nRevisa dos cosas en el Apps Script:\n1. Que doGet acepte el parámetro callback (archivo .gs adjunto).\n2. Que la implementación esté como "Ejecutar como: yo" y "Acceso: cualquiera", y que hayas pulsado Implementar.\n\nTu trabajo sigue guardado en este navegador. Pulsa ↓ Exportar para respaldarlo.\n\nDetalle: ' + err);
+    alert('No se pudo sincronizar.\n\nRevisa dos cosas en el Apps Script:\n1. Que doGet acepte el parámetro callback y doPost lea el campo "datos" (archivo .gs adjunto).\n2. Que la implementación esté como "Ejecutar como: yo" y "Acceso: cualquiera", y que hayas pulsado Implementar.\n\nTu trabajo sigue guardado en este navegador. Pulsa ↓ Exportar para respaldarlo.\n\nDetalle: ' + err);
   }
   btn.disabled = false;
 };
